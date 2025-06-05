@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Cashback extends Model
 {
-    protected $fillable = ['card_id', 'transaction_id', 'invoice_id', 'amount', 'calculation_date'];
+    protected $fillable = ['card_id', 'transaction_id', 'currency_code', 'invoice_id', 'amount', 'calculation_date'];
 
     public function card()
     {

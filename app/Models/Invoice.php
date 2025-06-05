@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Invoice extends Model
 {
-    protected $fillable = ['card_id', 'month_reference', 'amount', 'cashback_rate', 'due_date', 'status'];
+    protected $fillable = ['card_id', 'month_reference', 'amount', 'currency_code', 'cashback_rate', 'due_date', 'status'];
 
     public function card(): BelongsTo
     {
@@ -21,11 +21,12 @@ class Invoice extends Model
         return $this->hasMany(Transaction::class);
     }
 
-    public function cashback(): HasOne
+    public function cashback(): HasOneaa
     {
         return $this->hasOne(Cashback::class);
     }
 
+    // Como o cashback pode ser por transação ou por fatura, vamos calcular o total de cashback de acordo com a configuração do cartão
     public function getTotalCashbackAttribute()
     {
         if ($this->card->is_cashback_per_transaction) {

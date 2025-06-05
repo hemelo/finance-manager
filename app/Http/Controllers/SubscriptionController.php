@@ -5,27 +5,25 @@ namespace App\Http\Controllers;
 use App\Models\Card;
 use App\Models\Subscription;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth; // Adicionado para clareza
+use Illuminate\Support\Facades\Auth;
 use Carbon\Carbon;
 use Illuminate\Validation\Rule;
-
-// Adicionado para clareza
 
 class SubscriptionController extends Controller
 {
     public function index()
     {
-        $this->authorize('viewAny', Subscription::class); // Assumindo que existe ou será adicionado à SubscriptionPolicy
-        $subscriptions = Auth::user()->subscriptions()->with('card')->latest()->get(); // Usando Auth::user() explicitamente
+        $this->authorize('viewAny', Subscription::class);
+        $subscriptions = Auth::user()->subscriptions()->with('card.bankAccount')->latest()->get(); // Adicionado bankAccount para exibir moeda
         return view('subscriptions.index', compact('subscriptions'));
     }
 
     public function create()
     {
-        $this->authorize('create', Subscription::class); // Assumindo que existe ou será adicionado
-        $cards = Auth::user()->cards;
+        $this->authorize('create', Subscription::class);
+        $cards = Auth::user()->cards()->active()->with('bankAccount')->get(); // Apenas cartões ativos
         if ($cards->isEmpty()) {
-            return redirect()->route('cards.create')->with('warning', 'Você precisa cadastrar um cartão antes de adicionar uma assinatura.');
+            return redirect()->route('cards.create')->with('warning', 'Você precisa de um cartão ativo para adicionar uma assinatura.');
         }
         return view('subscriptions.create', compact('cards'));
     }
@@ -35,26 +33,26 @@ class SubscriptionController extends Controller
         $this->authorize('create', Subscription::class);
         $user = Auth::user();
         $request->validate([
-            'card_id' => ['required', Rule::exists('cards', 'id')->where('user_id', $user->id)], // Garante que o cartão é do usuário
+            // Validar se o cartão existe, pertence ao usuário e está ativo
+            'card_id' => ['required', Rule::exists('cards', 'id')->where('user_id', $user->id)->where('status', 'active')],
             'name' => 'required|string|max:255',
             'category' => 'required|string|max:255',
-            'amount' => 'required|numeric|min:0.01',
+            'amount' => 'required|numeric|min:0.01', // Este valor será na moeda do cartão
             'frequency' => 'required|in:monthly,yearly',
-            'start_date' => 'required|date|after_or_equal:today', // Geralmente data de início não é no passado
+            'start_date' => 'required|date|after_or_equal:today',
         ]);
 
-        // A validação acima já garante que o card pertence ao usuário.
-        // $card = Card::where('id', $request->card_id)->where('user_id', $user->id)->firstOrFail();
+        // $card = Card::findOrFail($request->card_id); // A validação já garante isso
 
         Subscription::create([
             'user_id' => $user->id,
             'card_id' => $request->card_id,
             'name' => $request->name,
             'category' => $request->category,
-            'amount' => $request->amount,
+            'amount' => $request->amount, // Na moeda do cartão
             'frequency' => $request->frequency,
             'start_date' => $request->start_date,
-            'next_billing_date' => Carbon::parse($request->start_date), // Primeira cobrança na data de início
+            'next_billing_date' => Carbon::parse($request->start_date),
             'status' => 'active',
         ]);
 
@@ -64,51 +62,47 @@ class SubscriptionController extends Controller
     public function edit(Subscription $subscription)
     {
         $this->authorize('update', $subscription);
-        $cards = Auth::user()->cards;
+        $cards = Auth::user()->cards()->active()->with('bankAccount')->get();
         return view('subscriptions.edit', compact('subscription', 'cards'));
     }
 
     public function update(Request $request, Subscription $subscription)
     {
         $this->authorize('update', $subscription);
-        $user = Auth::user(); //
+        $user = Auth::user();
         $request->validate([
-            'card_id' => ['required', Rule::exists('cards', 'id')->where('user_id', $user->id)], // Garante que o cartão é do usuário
+            'card_id' => ['required', Rule::exists('cards', 'id')->where('user_id', $user->id)->where('status', 'active')],
             'name' => 'required|string|max:255',
             'category' => 'required|string|max:255',
             'amount' => 'required|numeric|min:0.01',
             'frequency' => 'required|in:monthly,yearly',
-            // Não permitir alterar start_date ou next_billing_date diretamente aqui,
-            // a menos que haja uma lógica de recálculo específica.
+            // Se o cartão for alterado, a moeda da assinatura efetivamente muda.
+            // O valor do 'amount' deve ser interpretado como na moeda do NOVO cartão.
         ]);
+
+        // $newCard = Card::findOrFail($request->card_id);
+        // A validação já garante que o novo cartão é válido e pertence ao usuário
 
         $subscription->update($request->only(['card_id', 'name', 'category', 'amount', 'frequency']));
 
         return redirect()->route('subscriptions.index')->with('success', 'Assinatura atualizada com sucesso.');
     }
 
-    public function pause(Subscription $subscription)
+    // pause, resume, destroy (cancel) como na resposta anterior, usando authorize.
+    public function pause(Subscription $subscription) //
     {
-        $this->authorize('update', $subscription); // Ou uma policy 'pause'
+        $this->authorize('update', $subscription);
         $subscription->update(['status' => 'paused']);
         return redirect()->route('subscriptions.index')->with('success', 'Assinatura pausada.');
     }
 
-    public function resume(Subscription $subscription)
+    public function resume(Subscription $subscription) //
     {
-        $this->authorize('update', $subscription); // Ou uma policy 'resume'
-
-        // Define a próxima data de cobrança. Pode ser hoje ou a data original se for no futuro.
+        $this->authorize('update', $subscription);
         $nextBilling = Carbon::parse($subscription->next_billing_date);
         if ($nextBilling->isPast()) {
-            $nextBilling = Carbon::today(); // Ou lógica para recalcular com base na frequência e última data de cobrança
-            // Se quiser que a cobrança seja no próximo ciclo normal a partir de hoje:
-            // $nextBilling = $subscription->frequency === 'monthly' ? Carbon::today()->addMonth() : Carbon::today()->addYear();
-            // A lógica do comando GenerateSubscriptionTransactions pode precisar ser ajustada
-            // para lidar com datas de cobrança retroativas após resumir.
-            // Por simplicidade, definimos para hoje se a data original já passou.
+            $nextBilling = Carbon::today();
         }
-
         $subscription->update([
             'status' => 'active',
             'next_billing_date' => $nextBilling,
@@ -116,10 +110,10 @@ class SubscriptionController extends Controller
         return redirect()->route('subscriptions.index')->with('success', 'Assinatura retomada.');
     }
 
-    public function destroy(Subscription $subscription) // Este método está implementado como cancelamento
+    public function destroy(Subscription $subscription) //
     {
-        $this->authorize('delete', $subscription); // Ou uma policy 'cancel'
-        $subscription->update(['status' => 'canceled']); // Não deleta, apenas marca como cancelada
+        $this->authorize('delete', $subscription);
+        $subscription->update(['status' => 'canceled']);
         return redirect()->route('subscriptions.index')->with('success', 'Assinatura cancelada.');
     }
 }

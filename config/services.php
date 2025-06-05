@@ -34,5 +34,9 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
+    'exchangerate_api' => [
+        'key' => env('EXCHANGERATE_API_KEY'),
+        'base_url' => env('EXCHANGERATE_API_BASE_URL', 'https://v6.exchangerate-api.com/v6/'),
+    ],
 
 ];

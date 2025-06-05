@@ -12,14 +12,16 @@ class BankAccountController extends Controller
     public function index()
     {
         $this->authorize('viewAny', BankAccount::class);
-        $bankAccounts = Auth::user()->bankAccounts()->get(); // Otimizado
+        $bankAccounts = Auth::user()->bankAccounts()->orderBy('status')->orderBy('bank_name')->get();
         return view('bank_accounts.index', compact('bankAccounts'));
     }
 
     public function create()
     {
         $this->authorize('create', BankAccount::class);
-        return view('bank_accounts.create');
+        // Você pode querer passar uma lista de códigos de moeda válidos para a view
+        // $currencyCodes = ['USD', 'BRL', 'EUR', ...];
+        return view('bank_accounts.create'/*, compact('currencyCodes')*/);
     }
 
     public function store(Request $request)
@@ -28,21 +30,21 @@ class BankAccountController extends Controller
         $request->validate([
             'bank_name' => 'required|string|max:255',
             'account_number' => [
-                'required',
-                'string',
-                'max:255',
-                // A migration define unique globalmente para account_number
-                // Se fosse único por usuário, seria: Rule::unique('bank_accounts')->where('user_id', Auth::id())
-                Rule::unique('bank_accounts'),
+                'required', 'string', 'max:255',
+                Rule::unique('bank_accounts')->where('user_id', Auth::id()) // Correção: Único por usuário, não global
             ],
+            'currency_code' => 'required|string|size:3', // Validar contra lista de moedas suportadas se necessário
             'balance' => 'required|numeric|min:0',
+            'status' => ['sometimes', Rule::in(['active', 'inactive'])],
         ]);
 
         BankAccount::create([
             'user_id' => Auth::id(),
             'bank_name' => $request->bank_name,
             'account_number' => $request->account_number,
+            'currency_code' => strtoupper($request->currency_code),
             'balance' => $request->balance,
+            'status' => $request->status ?? 'active',
         ]);
 
         return redirect()->route('bank_accounts.index')->with('success', 'Conta bancária criada com sucesso.');
@@ -53,6 +55,8 @@ class BankAccountController extends Controller
         $this->authorize('view', $bankAccount);
         $bankAccount->load(['transactions' => function ($query) {
             $query->orderBy('date', 'desc');
+        }, 'cards' => function ($query) { // Carregar cartões ativos associados
+            $query->active();
         }]);
         return view('bank_accounts.show', compact('bankAccount'));
     }
@@ -60,6 +64,7 @@ class BankAccountController extends Controller
     public function edit(BankAccount $bankAccount)
     {
         $this->authorize('update', $bankAccount);
+        // A moeda não deve ser editável após a criação
         return view('bank_accounts.edit', compact('bankAccount'));
     }
 
@@ -70,37 +75,37 @@ class BankAccountController extends Controller
         $request->validate([
             'bank_name' => 'required|string|max:255',
             'account_number' => [
-                'required',
-                'string',
-                'max:255',
-                Rule::unique('bank_accounts')->ignore($bankAccount->id),
+                'required', 'string', 'max:255',
+                Rule::unique('bank_accounts')->where('user_id', Auth::id())->ignore($bankAccount->id) // Correção
             ],
+            // 'currency_code' não deve ser editável
+            // 'balance' é atualizado via transações
+            'status' => ['required', Rule::in(['active', 'inactive'])],
         ]);
 
-        $bankAccount->update($request->only(['bank_name', 'account_number']));
+        $bankAccount->update($request->only(['bank_name', 'account_number', 'status']));
 
         return redirect()->route('bank_accounts.show', $bankAccount)->with('success', 'Conta bancária atualizada com sucesso.');
     }
 
-    public function destroy(BankAccount $bankAccount)
+    // Remover destroy e adicionar toggleStatus
+    public function toggleStatus(BankAccount $bankAccount)
     {
-        $this->authorize('delete', $bankAccount);
+        $this->authorize('toggleStatus', $bankAccount); // Usando a nova permissão da policy
 
-        // Verifica se a conta bancária tem cartões vinculados
-        if ($bankAccount->cards()->exists()) {
-            return redirect()->route('bank_accounts.index')->with('error', 'Não é possível excluir a conta. Existem cartões vinculados a ela. Remova ou reatribua os cartões primeiro.');
+        if ($bankAccount->status === 'inactive') {
+            $bankAccount->status = 'active';
+            $message = 'Conta bancária ativada com sucesso.';
+        } else {
+            // Lógica para impedir desativação se houver cartões ativos vinculados
+            if ($bankAccount->cards()->active()->exists()) {
+                return redirect()->route('bank_accounts.show', $bankAccount)->with('error', 'Não é possível desativar. Existem cartões ativos vinculados a esta conta.');
+            }
+            $bankAccount->status = 'inactive';
+            $message = 'Conta bancária desativada com sucesso.';
         }
-        // Verifica se a conta bancária tem saldo diferente de zero
-        if ($bankAccount->balance != 0) {
-            return redirect()->route('bank_accounts.show', $bankAccount)->with('error', 'Não é possível excluir a conta com saldo diferente de zero.');
-        }
+        $bankAccount->save();
 
-        // Verifica se a conta bancária tem transações sem cartão associado
-        if ($bankAccount->transactions()->whereDoesntHave('card')->exists()){
-            return redirect()->route('bank_accounts.show', $bankAccount)->with('error', 'Não é possível excluir a conta pois existem transações bancárias associadas.');
-        }
-
-        $bankAccount->delete();
-        return redirect()->route('bank_accounts.index')->with('success', 'Conta bancária excluída com sucesso.');
+        return redirect()->route('bank_accounts.index')->with('success', $message);
     }
 }

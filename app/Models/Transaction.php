@@ -6,7 +6,18 @@ use Illuminate\Database\Eloquent\Model;
 
 class Transaction extends Model
 {
-    protected $fillable = ['card_id', 'invoice_id', 'subscription_id', 'amount', 'date', 'description', 'installments', 'type'];
+    protected $fillable = [
+        'card_id',
+        'bank_account_id',
+        'invoice_id',
+        'subscription_id',
+        'amount',
+        'currency_code',
+        'date',
+        'description',
+        'installments',
+        'type',
+    ];
 
     public function card()
     {
@@ -21,5 +32,10 @@ class Transaction extends Model
     public function subscription()
     {
         return $this->belongsTo(Subscription::class);
+    }
+
+    public function bankAccount()
+    {
+        return $this->belongsTo(BankAccount::class);
     }
 }
